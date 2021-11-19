@@ -242,8 +242,11 @@ public class CompositeAggReader<T> implements Closeable {
         }
         parser.nextToken(); // Eliminate END_OBJECT
 
-        Assert.notNull(afterKey, "invalid response; missing composite aggregate after key");
         Assert.notNull(rows, "invalid response; missing composite aggregate buckets");
+        if (rows.size() > 0) {
+            // after_key is required if there are results remaining.
+            Assert.notNull(afterKey, "invalid response; missing composite aggregate after key");
+        }
 
         return new CompositeAggResult<>(afterKey, rows, rows.isEmpty());
     }
@@ -252,11 +255,14 @@ public class CompositeAggReader<T> implements Closeable {
         Assert.notNull(parser);
         Assert.isTrue(parser.currentToken() == Token.START_OBJECT, "invalid response; missing composite agg after key object start");
 
-        int afterKeyStart = parser.tokenCharOffset();
-        parser.skipChildren();
-        int afterKeyEnd = parser.tokenCharOffset();
+        parser.nextToken(); // Advance to first field
+        int afterKeyFirstFieldNameOffset = parser.tokenCharOffset();
+        ParsingUtils.skipCurrentBlock(parser); // Skip to end object
+        int afterKeyObjectEnd = parser.tokenCharOffset();
+        BytesArray afterKey = new BytesArray(copy.bytes(), afterKeyFirstFieldNameOffset, afterKeyObjectEnd - afterKeyFirstFieldNameOffset);
+
         parser.nextToken(); // Eliminate END_OBJECT
-        return new BytesArray(copy.bytes(), afterKeyStart, afterKeyEnd - afterKeyStart);
+        return afterKey;
     }
 
     private List<T> parseBuckets(Parser parser) {

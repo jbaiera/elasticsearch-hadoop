@@ -100,26 +100,31 @@ public class CompositeAggQuery<T> implements Iterator<T>, Closeable, StatsAware 
         }
 
         while (!finished && (batch.isEmpty() || batchIndex >= batch.size())) {
-            // TODO: Fix when we can put the after key into the agg request
-            finished = true; break;
-//            try {
-//                nextBatch();
-//            } catch (IOException ex) {
-//                throw new EsHadoopIllegalStateException("Cannot retrieve scroll [" + afterKey + "]", ex);
-//            }
-//            read += batch.size();
-//            stats.docsReceived += batch.size();
-//
-//            // reset index
-//            batchIndex = 0;
+            try {
+                nextBatch();
+            } catch (IOException ex) {
+                throw new EsHadoopIllegalStateException("Cannot retrieve aggregation after terms [" + afterKey + "]", ex);
+            }
+            read += batch.size();
+            stats.docsReceived += batch.size();
+
+            // reset index
+            batchIndex = 0;
         }
 
         return !finished;
     }
 
     private void nextBatch() throws IOException {
-        // Create request body
-        // TODO: Maybe we can reuse parts of the bulk request templating api here?
+        FastByteArrayOutputStream out = renderSearchRequest();
+        CompositeAggReader.CompositeAgg<T> composite = repository.aggregateStream(endpoint, out.bytes(), reader);
+        currentPitId = composite.getPitId();
+        afterKey = composite.getResult().getAfterKey();
+        batch = composite.getResult().getRows();
+        finished = composite.getResult().isConcluded();
+    }
+
+    private FastByteArrayOutputStream renderSearchRequest() {
         FastByteArrayOutputStream out = new FastByteArrayOutputStream(256);
         JacksonJsonGenerator generator = new JacksonJsonGenerator(out);
         try {
@@ -159,12 +164,12 @@ public class CompositeAggQuery<T> implements Iterator<T>, Closeable, StatsAware 
                                 .writeEndObject();
                             }
                             generator.writeEndArray();
-//                            if (afterKey != null) {
-//                                // TODO: Generators can't take a regular chunk of already made JSON and add it to the
-//                                //  stream. This needs to be changed in order to paginate the data coming in.
-//                                generator.writeFieldName("after_key");
-//                                // add after_key contents to generator
-//                            }
+                            if (afterKey != null) {
+                                // Be sure to include leading comma to separate field from previous end array
+                                generator.writeFieldName("after").writeBeginObject()
+                                        .writeRaw(afterKey.toString())
+                                .writeEndObject();
+                            }
                         }
                         generator.writeEndObject();
                         generator.writeFieldName("aggs").writeBeginObject();
@@ -185,12 +190,7 @@ public class CompositeAggQuery<T> implements Iterator<T>, Closeable, StatsAware 
         } finally {
             generator.close();
         }
-
-        CompositeAggReader.CompositeAgg<T> composite = repository.aggregateStream(endpoint, out.bytes(), reader);
-        currentPitId = composite.getPitId();
-        afterKey = composite.getResult().getAfterKey();
-        batch = composite.getResult().getRows();
-        finished = composite.getResult().isConcluded();
+        return out;
     }
 
     public long getRead() {
